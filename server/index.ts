@@ -64,6 +64,7 @@ app.post('/api/chat', async (req, res) => {
       const resp = await client.messages.create({
         model: MODEL,
         max_tokens: 512,
+        temperature: 0,
         system: cfg.system,
         tools: cfg.tools,
         messages: history,
