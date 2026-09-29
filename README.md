@@ -120,6 +120,7 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ANTHROPIC_WORKSPACE_ID=optional_workspace_id
 MODEL=claude-haiku-4-5-20251001
 PORT=3001
+GUILD_API_KEY=optional_guild_api_key
 ```
 
 ### 4. Running the Application
@@ -186,9 +187,10 @@ The codebase was engineered for maximum security hygiene and scanned with **Snyk
 
 The **AgentBreaker Referee** is a Guild agent that judges play sessions: it decides whether a solve was a legitimate exploit or blocked by the defense, classifies the technique used, scores the attempt and gives a defender takeaway.
 
-- **Referee API Integration:** The game calls the Referee through the Guild REST API (`POST /workspaces/{id}/sessions` and event polling) using `GUILD_API_KEY`. Configure `GUILD_API_KEY=<your-key>` in `.env` to enable live judging, or run in graceful offline mode if unconfigured.
+- **Referee API Integration:** After a solve, the game sends a short, sanitized play report (flags stripped, 4,000-char cap, rate-limited) to the Referee through the Guild REST API (`POST /workspaces/{id}/sessions` with `agent_id`, then event polling) using `GUILD_API_KEY`. The verdict shows in the UI with `source: guild`. A real verdict takes about 30-60 seconds. If `GUILD_API_KEY` is unset or Guild is unreachable, the game falls back to an offline verdict and stays fully playable.
 - **Guild Workspace:** https://app.guild.ai/users/ali-mo/workspaces/agentbreaker
-- **Agent:** `ali-mo~agentbreaker-referee` (published, installed in the workspace above)
+- **Agent (published, public):** https://app.guild.ai/hub/agents/ali-mo~agentbreaker-referee (`ali-mo~agentbreaker-referee`)
+- **Note for reviewers:** Guild asks for a free sign-in (no credit card) before showing these pages.
 - **Source:** [`guild/referee/agent.ts`](guild/referee/agent.ts). It is a one-shot LLM agent with **no tools**, so a hostile transcript cannot make it act on anything. Session reports are treated as untrusted data.
 
 ---
