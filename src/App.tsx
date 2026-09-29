@@ -19,10 +19,19 @@ interface RefereeVerdict {
 }
 
 function getRankTitle(score: number): string {
-  if (score >= 1000) return 'Agent Breaker'
+  if (score >= 1000) return 'Agent Breaker (Master)'
   if (score >= 700) return 'Agent Whisperer'
-  if (score >= 300) return 'Prompt Poker'
-  return 'Script Kiddie'
+  if (score >= 300) return 'Prompt Detective'
+  return 'Prompt Apprentice'
+}
+
+const CARD_TYPE_CONFIG: Record<
+  ExploitCard['type'],
+  { step: string; label: string; icon: string; description: string }
+> = {
+  PERSONA: { step: '1. Who', label: 'Who (Role)', icon: '🎭', description: 'Who you pretend to be' },
+  FRAMING: { step: '2. Why', label: 'Why (Excuse)', icon: '🧪', description: 'Why you need this done' },
+  ASK: { step: '3. What', label: 'What (Request)', icon: '⚡', description: 'What you want the bot to do' },
 }
 
 const SUSPICIOUS_WORDS = [
@@ -64,6 +73,11 @@ export default function App() {
   const [showVictory, setShowVictory] = useState(false)
   const [refereeLoading, setRefereeLoading] = useState(false)
   const [refereeVerdict, setRefereeVerdict] = useState<RefereeVerdict | null>(null)
+
+  // Selected Trick Cards Track
+  const [selectedCards, setSelectedCards] = useState<Record<string, string>>({})
+  // Inspector Progressive Disclosure
+  const [inspectorOpen, setInspectorOpen] = useState(false)
 
   // Replay State
   const [showReplay, setShowReplay] = useState(false)
@@ -120,6 +134,8 @@ export default function App() {
     setRefereeLoading(false)
     setShowReplay(false)
     setRoundWon(false)
+    setSelectedCards({})
+    setInspectorOpen(false)
   }
 
   const resetCurrentLevel = () => {
@@ -132,6 +148,8 @@ export default function App() {
     setRefereeLoading(false)
     setShowReplay(false)
     setRoundWon(false)
+    setSelectedCards({})
+    setInspectorOpen(false)
   }
 
   const requestRefereeVerdict = async (
@@ -209,6 +227,9 @@ export default function App() {
       setMessages([...next, { role: 'assistant', content: data.reply }])
       const receivedEvents: InspectorEvent[] = data.events || []
       setEvents(receivedEvents)
+      if (receivedEvents.length > 0) {
+        setInspectorOpen(true)
+      }
 
       const userTurns = next.filter((m) => m.role === 'user').map((m) => m.content)
 
@@ -245,16 +266,16 @@ export default function App() {
       })
       const data = await r.json()
       if (data.correct) {
-        setFlagStatus({ success: true, msg: '🚩 Correct flag captured!' })
+        setFlagStatus({ success: true, msg: '🎉 Correct passcode captured!' })
         setRoundWon(true)
         setSolvedLevels((prev) => new Set([...prev, currentLevel]))
         setCapturedFlags((prev) => ({ ...prev, [currentLevel]: flagToTest }))
         if (currentLevel === 4) setShowVictory(true)
       } else {
-        setFlagStatus({ success: false, msg: '❌ Incorrect flag. Keep probing!' })
+        setFlagStatus({ success: false, msg: "❌ That passcode isn't right. Keep trying!" })
       }
     } catch {
-      setFlagStatus({ success: false, msg: 'Network error validating flag.' })
+      setFlagStatus({ success: false, msg: 'Network error validating passcode.' })
     }
   }
 
@@ -269,8 +290,9 @@ export default function App() {
       const data = await r.json()
       if (!r.ok) throw new Error(data.error ?? 'Approval request failed')
 
-      if (data.events) {
+      if (data.events && data.events.length > 0) {
         setEvents((prev) => [...prev, ...data.events])
+        setInspectorOpen(true)
       }
       setMessages((prev) => [...prev, { role: 'assistant', content: data.result }])
 
@@ -298,8 +320,9 @@ export default function App() {
     setInput(meta.demoPayload)
   }
 
-  // Exploit Card Click: appends cleanly to input
+  // Exploit Card Click: appends cleanly to input and marks selected
   const handleCardClick = (card: ExploitCard) => {
+    setSelectedCards((prev) => ({ ...prev, [card.type]: card.id }))
     setInput((prev) => {
       const trimmed = prev.trim()
       if (!trimmed) return card.text
@@ -372,43 +395,44 @@ export default function App() {
 
   const getReplayStepInfo = (evt: InspectorEvent) => {
     if (evt.type === 'tool_call') {
+      const hasInputs = Object.keys(evt.input).length > 0
       return {
         icon: '⚡',
-        title: `The assistant reached for: ${evt.name}`,
-        sub: `Parameters: ${JSON.stringify(evt.input)}`,
+        title: `The bot used the tool: ${evt.name}`,
+        sub: hasInputs ? `Inputs: ${JSON.stringify(evt.input)}` : 'Inputs: None',
       }
     }
     if (evt.type === 'tool_result') {
       if (evt.tainted) {
         return {
           icon: '⚠️',
-          title: `It trusted poisoned data from: ${evt.name}`,
+          title: `The bot read hidden instructions from: ${evt.name}`,
           sub: evt.output.slice(0, 140),
         }
       }
       return {
         icon: '📥',
-        title: `Tool responded with clean data: ${evt.name}`,
+        title: `Tool returned data: ${evt.name}`,
         sub: evt.output.slice(0, 140),
       }
     }
     if (evt.type === 'defense_block') {
       return {
         icon: '🛡️',
-        title: `A safety guard stepped in: ${evt.layer}`,
+        title: `Safety guard blocked the action: ${evt.layer}`,
         sub: evt.message,
       }
     }
     if (evt.type === 'pending_action') {
       return {
         icon: '👤',
-        title: `A human was asked to approve: ${evt.name}`,
-        sub: 'High-risk action held in queue until administrator confirmation.',
+        title: `Paused for human confirmation: ${evt.name}`,
+        sub: 'Dangerous action held until an administrator confirms it.',
       }
     }
     return {
       icon: 'ℹ️',
-      title: 'Action recorded in audit log',
+      title: 'Action recorded in activity log',
       sub: '',
     }
   }
@@ -421,7 +445,7 @@ export default function App() {
           <div className="brand-logo">
             <span>☠</span> AGENTBREAKER
           </div>
-          <span className="brand-badge">CTF · AI Security Lab</span>
+          <span className="brand-badge">Interactive AI Security Lab</span>
         </div>
 
         <div className="level-selector-bar">
@@ -445,12 +469,14 @@ export default function App() {
         </div>
 
         <div className="header-stats">
-          <div className="stat-chip">
-            <span>Score:</span>
-            <span className="stat-value">{totalScore} pts</span>
-          </div>
-          <button className="hint-trigger-btn" onClick={resetCurrentLevel} title="Reset current chat and events">
-            ↺ Reset Level
+          {messages.length > 0 && (
+            <div className="stat-chip">
+              <span>Score:</span>
+              <span className="stat-value">{totalScore} pts</span>
+            </div>
+          )}
+          <button className="reset-level-btn text-sm" onClick={resetCurrentLevel} title="Reset level">
+            ↺ Reset
           </button>
         </div>
       </header>
@@ -458,169 +484,174 @@ export default function App() {
       {/* Main 3-Panel Arena */}
       <main className="main-arena">
         {/* Panel 1: Mission Briefing */}
-        <section className="panel mission-panel" aria-label="Mission Briefing">
-          <div className="panel-header">
-            <span className="panel-title">🎯 Mission Briefing</span>
-            <span className="points-badge">Level {currentLevel} of 4</span>
+        <section className="panel mission-panel" aria-label="Level Mission">
+          <div className="mission-hero">
+            <div className="mission-title-row">
+              <h2 className="mission-title">{meta.name}</h2>
+              <span className="owasp-chip" title={meta.owaspPlain}>{meta.owasp}</span>
+            </div>
+            <p className="mission-goal text-base">{meta.objective}</p>
           </div>
 
-          <div className="mission-card">
-            <h2 className="level-title-large">{meta.name}</h2>
-            <div style={{ fontSize: 12, color: 'var(--accent-cyan)', marginBottom: 8, fontWeight: 600 }}>
-              {meta.subtitle}
-            </div>
+          <div className="disclosure-group">
+            {/* Need a hint? */}
+            <details className="disclosure-card">
+              <summary className="disclosure-summary">
+                <span>💡 Need a hint?</span>
+                <span className="disclosure-badge text-mono">
+                  {revealedHints[currentLevel] || 0}/{meta.hints.length}
+                </span>
+              </summary>
+              <div className="disclosure-content">
+                {meta.hints.map((h) => {
+                  const isRevealed = (revealedHints[currentLevel] || 0) >= h.tier
+                  return (
+                    <div key={h.tier} className="hint-row">
+                      {!isRevealed ? (
+                        <button
+                          type="button"
+                          className="hint-trigger-btn text-sm"
+                          onClick={() => revealHintTier(h.tier)}
+                        >
+                          <span>Reveal Hint #{h.tier}</span>
+                          <span className="hint-cost">-{h.cost} pts</span>
+                        </button>
+                      ) : (
+                        <div className="hint-content-box text-sm">
+                          <strong>Hint #{h.tier}:</strong> {h.text}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
 
-            <div className="badge-row">
-              <span className="owasp-badge" title={meta.owaspPlain}>
-                {meta.owasp}
-              </span>
-              <span className="points-badge">+{meta.points} Pts</span>
-            </div>
+                {((revealedHints[currentLevel] || 0) >= 3 || isDemoAlways) && (
+                  <button type="button" className="demo-attack-btn text-sm" onClick={fillDemoAttack}>
+                    ⚡ Auto-Fill Example Trick
+                  </button>
+                )}
+              </div>
+            </details>
 
-            <div className="objective-box">
-              <strong>Your Mission:</strong>
-              {meta.objective}
-            </div>
-
-            <p className="description-text">{meta.description}</p>
-          </div>
-
-          {/* Tiered Hints */}
-          <div className="hints-card">
-            <div className="panel-title" style={{ fontSize: 12 }}>
-              💡 Tactical Intel (Hints)
-            </div>
-
-            {meta.hints.map((h) => {
-              const isRevealed = (revealedHints[currentLevel] || 0) >= h.tier
-              return (
-                <div key={h.tier} className="hint-row">
-                  {!isRevealed ? (
-                    <button className="hint-trigger-btn" onClick={() => revealHintTier(h.tier)}>
-                      <span>Reveal Hint #{h.tier}</span>
-                      <span style={{ color: '#fbbf24' }}>-{h.cost} pts</span>
+            {/* Enter secret passcode */}
+            <details className="disclosure-card">
+              <summary className="disclosure-summary">
+                <span>🚩 Enter secret passcode</span>
+                {solvedLevels.has(currentLevel) && (
+                  <span className="disclosure-badge success">Solved</span>
+                )}
+              </summary>
+              <div className="disclosure-content">
+                {solvedLevels.has(currentLevel) ? (
+                  <div className="flag-status-alert success text-sm">
+                    <strong>🎉 Level Solved!</strong>
+                    <div className="text-mono" style={{ marginTop: 4 }}>
+                      Passcode: {capturedFlags[currentLevel] || 'Captured'}
+                    </div>
+                    <button
+                      type="button"
+                      className="replay-trigger-btn text-sm"
+                      style={{ marginTop: 8 }}
+                      onClick={() => startReplay()}
+                    >
+                      🎬 Step-by-Step Replay
                     </button>
+                  </div>
+                ) : (
+                  <form className="flag-form" onSubmit={submitManualFlag}>
+                    <label htmlFor="manual-flag-input" className="text-sm text-dim">
+                      Found the secret passcode? Paste it here:
+                    </label>
+                    <input
+                      id="manual-flag-input"
+                      className="flag-input text-sm"
+                      value={manualFlag}
+                      onChange={(e) => setManualFlag(e.target.value)}
+                      placeholder="e.g. FLAG{...}"
+                      autoComplete="off"
+                    />
+                    <button type="submit" className="flag-submit-btn text-sm">
+                      Submit Passcode
+                    </button>
+                    {flagStatus && (
+                      <div className={`flag-status-alert ${flagStatus.success ? 'success' : 'error'} text-sm`}>
+                        {flagStatus.msg}
+                      </div>
+                    )}
+                  </form>
+                )}
+              </div>
+            </details>
+
+            {/* Level details */}
+            <details className="disclosure-card">
+              <summary className="disclosure-summary">
+                <span>ℹ️ Level details</span>
+                <span className="disclosure-badge">+{meta.points} pts</span>
+              </summary>
+              <div className="disclosure-content text-sm text-muted">
+                <p style={{ margin: 0 }}>{meta.description}</p>
+              </div>
+            </details>
+
+            {/* AI Challenge Judge Verdict Card */}
+            {(refereeLoading || refereeVerdict) && (
+              <details open className="disclosure-card">
+                <summary className="disclosure-summary">
+                  <span>⚖️ AI Challenge Judge</span>
+                  <span className={`verdict-chip ${refereeLoading ? 'offline' : refereeVerdict?.verdict || 'offline'}`}>
+                    {refereeLoading ? 'Judging…' : refereeVerdict?.source === 'offline' ? 'Offline' : refereeVerdict?.verdict}
+                  </span>
+                </summary>
+                <div className="disclosure-content">
+                  {refereeLoading ? (
+                    <div className="text-sm text-muted">
+                      AI Judge is evaluating your trick and the bot's reaction…
+                    </div>
+                  ) : refereeVerdict?.source === 'offline' ? (
+                    <div className="referee-body text-sm">
+                      <div className="text-muted">
+                        AI Judge is offline (set GUILD_API_KEY in .env for live automated evaluation).
+                      </div>
+                      <a
+                        href="https://app.guild.ai/users/ali-mo/workspaces/agentbreaker"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="referee-link text-sm"
+                      >
+                        Judged by a Guild agent (ali-mo~agentbreaker-referee) ↗
+                      </a>
+                    </div>
                   ) : (
-                    <div className="hint-content-box">
-                      <strong>Hint #{h.tier}:</strong> {h.text}
+                    <div className="referee-body text-sm">
+                      <div className="referee-field">
+                        <strong>Strategy Used:</strong>
+                        <span>{refereeVerdict?.technique}</span>
+                      </div>
+                      <div className="referee-field">
+                        <strong>Bonus Score:</strong>
+                        <span className="text-cyan font-bold">
+                          +{refereeVerdict?.points} pts
+                        </span>
+                      </div>
+                      <div className="referee-field">
+                        <strong>Key Takeaway:</strong>
+                        <span>{refereeVerdict?.takeaway}</span>
+                      </div>
+                      <a
+                        href="https://app.guild.ai/users/ali-mo/workspaces/agentbreaker"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="referee-link text-sm"
+                      >
+                        Judged by a Guild agent (ali-mo~agentbreaker-referee) ↗
+                      </a>
                     </div>
                   )}
                 </div>
-              )
-            })}
-
-            {/* Demo Attack Button */}
-            {((revealedHints[currentLevel] || 0) >= 3 || isDemoAlways) && (
-              <button className="demo-attack-btn" onClick={fillDemoAttack}>
-                ⚡ Insert 1-Click Demo Attack
-              </button>
+              </details>
             )}
           </div>
-
-          {/* Flag Submission */}
-          <div className="flag-card">
-            <div className="panel-title" style={{ fontSize: 12, marginBottom: 8 }}>
-              🚩 Capture The Flag
-            </div>
-
-            {solvedLevels.has(currentLevel) ? (
-              <div className="flag-status-alert success">
-                <strong>Level Solved!</strong>
-                <div style={{ marginTop: 4, fontFamily: 'var(--font-mono)' }}>
-                  Flag: {capturedFlags[currentLevel] || 'Captured'}
-                </div>
-                <button
-                  type="button"
-                  className="replay-trigger-btn"
-                  style={{ marginTop: 8 }}
-                  onClick={() => startReplay()}
-                >
-                  🎬 Replay the Heist
-                </button>
-              </div>
-            ) : (
-              <form className="flag-form" onSubmit={submitManualFlag}>
-                <label htmlFor="manual-flag-input" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                  Submit extracted flag:
-                </label>
-                <input
-                  id="manual-flag-input"
-                  className="flag-input"
-                  value={manualFlag}
-                  onChange={(e) => setManualFlag(e.target.value)}
-                  placeholder="FLAG{...}"
-                  autoComplete="off"
-                />
-                <button type="submit" className="flag-submit-btn">
-                  Verify Flag
-                </button>
-                {flagStatus && (
-                  <div className={`flag-status-alert ${flagStatus.success ? 'success' : 'error'}`}>{flagStatus.msg}</div>
-                )}
-              </form>
-            )}
-          </div>
-
-          {/* Referee Verdict Card */}
-          {(refereeLoading || refereeVerdict) && (
-            <div className="referee-card">
-              <div className="referee-header">
-                <span className="referee-title">⚖️ Guild Referee</span>
-                {refereeLoading ? (
-                  <span className="verdict-chip offline">Judging…</span>
-                ) : (
-                  <span className={`verdict-chip ${refereeVerdict?.verdict || 'offline'}`}>
-                    {refereeVerdict?.source === 'offline' ? 'Referee Offline' : refereeVerdict?.verdict}
-                  </span>
-                )}
-              </div>
-
-              {refereeLoading ? (
-                <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-                  Evaluating play transcript against OWASP criteria with Guild agent…
-                </div>
-              ) : refereeVerdict?.source === 'offline' ? (
-                <div className="referee-body">
-                  <div style={{ color: 'var(--text-muted)' }}>
-                    Referee agent is offline (set GUILD_API_KEY in .env to enable live judging).
-                  </div>
-                  <a
-                    href="https://app.guild.ai/users/ali-mo/workspaces/agentbreaker"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="referee-link"
-                  >
-                    Judged by a Guild agent (ali-mo~agentbreaker-referee) ↗
-                  </a>
-                </div>
-              ) : (
-                <div className="referee-body">
-                  <div className="referee-field">
-                    <strong>Technique:</strong>
-                    <span>{refereeVerdict?.technique}</span>
-                  </div>
-                  <div className="referee-field">
-                    <strong>Score:</strong>
-                    <span style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>
-                      +{refereeVerdict?.points} pts
-                    </span>
-                  </div>
-                  <div className="referee-field">
-                    <strong>Takeaway:</strong>
-                    <span>{refereeVerdict?.takeaway}</span>
-                  </div>
-                  <a
-                    href="https://app.guild.ai/users/ali-mo/workspaces/agentbreaker"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="referee-link"
-                  >
-                    Judged by a Guild agent (ali-mo~agentbreaker-referee) ↗
-                  </a>
-                </div>
-              )}
-            </div>
-          )}
         </section>
 
         {/* Panel 2: Live Agent Chat */}
@@ -630,21 +661,20 @@ export default function App() {
               <div className="agent-avatar">🤖</div>
               <div className="agent-info">
                 <h3>{meta.botName}</h3>
-                <p>{meta.botRole}</p>
+                <p className="text-sm text-dim">{meta.botRole}</p>
               </div>
             </div>
             <div className={`defense-badge-state ${defense ? 'defended' : 'vulnerable'}`}>
-              <span>{defense ? '🛡️ GUARD UP' : '🔴 VULNERABLE'}</span>
+              <span>{defense ? '🛡️ GUARD ON' : '🔴 UNGUARDED'}</span>
             </div>
           </div>
 
           <div className="chat-history">
             {messages.length === 0 ? (
               <div className="chat-empty-state">
-                <div style={{ fontSize: 32 }}>⚡</div>
-                <div>Connection established with {meta.botName}.</div>
-                <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-                  Stack trick cards below to compose your attack, or type a custom prompt.
+                <div className="text-lg font-bold">Trick {meta.botName} into breaking its rules</div>
+                <div className="text-sm text-dim">
+                  Pick cards below to build your message, then press Send ↓
                 </div>
               </div>
             ) : (
@@ -653,7 +683,7 @@ export default function App() {
                 const hasFlag = m.content.includes('FLAG{')
                 return (
                   <div key={i} className={`chat-msg ${m.role}`}>
-                    <span className="msg-sender">{isAssistant ? meta.botName : 'Attacker (You)'}</span>
+                    <span className="msg-sender">{isAssistant ? meta.botName : 'You'}</span>
                     <div className={`msg-bubble ${hasFlag ? 'won-bubble' : ''}`}>{m.content}</div>
                   </div>
                 )
@@ -663,12 +693,12 @@ export default function App() {
             {/* Playful Win Micro-Copy Toast */}
             {roundWon && (
               <div className="win-toast">
-                <div className="win-toast-msg">
-                  <span>🏆</span> Nice. The bot just betrayed its owner!
+                <div className="win-toast-msg text-sm">
+                  <span>🏆</span> Nice! The bot broke its rules and leaked the secret!
                 </div>
                 {events.length > 0 && (
-                  <button type="button" className="replay-trigger-btn" onClick={() => startReplay()}>
-                    🎬 Replay the Heist
+                  <button type="button" className="replay-trigger-btn text-sm" onClick={() => startReplay()}>
+                    🎬 Step-by-Step Replay
                   </button>
                 )}
               </div>
@@ -677,8 +707,8 @@ export default function App() {
             {busy && (
               <div className="chat-msg assistant">
                 <span className="msg-sender">{meta.botName}</span>
-                <div className="msg-bubble" style={{ color: 'var(--accent-cyan)' }}>
-                  Thinking & evaluating tool invocations…
+                <div className="msg-bubble text-cyan text-sm">
+                  Thinking & deciding which tools to run…
                 </div>
               </div>
             )}
@@ -686,21 +716,23 @@ export default function App() {
           </div>
 
           <div className="chat-input-bar">
-            {/* Suspicion Meter (Cosmetic) */}
-            <div className="suspicion-bar-wrap">
-              <span className="suspicion-label">
-                Bot Suspicion:{' '}
-                {suspicionScore < 30 ? '🟢 Normal' : suspicionScore < 65 ? '🟡 Guarded' : '🔴 High Alert'}
-              </span>
-              <div className="suspicion-track" title="Real-time heuristic analysis of your prompt keywords">
-                <div
-                  className={`suspicion-fill ${
-                    suspicionScore < 30 ? 'low' : suspicionScore < 65 ? 'medium' : 'high'
-                  }`}
-                  style={{ width: `${Math.max(8, suspicionScore)}%` }}
-                />
+            {/* Suspicion Meter (Cosmetic) - hidden until first message is sent */}
+            {messages.length > 0 && (
+              <div className="suspicion-bar-wrap">
+                <span className="suspicion-label text-sm">
+                  Bot Alert:{' '}
+                  {suspicionScore < 30 ? '🟢 Normal' : suspicionScore < 65 ? '🟡 Guarded' : '🔴 High Alert'}
+                </span>
+                <div className="suspicion-track" title="Shows how alert the bot becomes based on suspicious words">
+                  <div
+                    className={`suspicion-fill ${
+                      suspicionScore < 30 ? 'low' : suspicionScore < 65 ? 'medium' : 'high'
+                    }`}
+                    style={{ width: `${Math.max(8, suspicionScore)}%` }}
+                  />
+                </div>
               </div>
-            </div>
+            )}
 
             <form
               className="input-form"
@@ -709,7 +741,7 @@ export default function App() {
                 void send()
               }}
             >
-              <label htmlFor="agent-chat-input" className="sr-only" style={{ display: 'none' }}>
+              <label htmlFor="agent-chat-input" className="sr-only">
                 Chat Message
               </label>
               <textarea
@@ -723,7 +755,7 @@ export default function App() {
                     void send()
                   }
                 }}
-                placeholder={`Attack ${meta.botName} (stack cards below or type)…`}
+                placeholder={`Trick ${meta.botName} (pick cards below or type)…`}
                 rows={1}
                 disabled={busy}
               />
@@ -732,41 +764,60 @@ export default function App() {
               </button>
             </form>
 
-            {/* Feature 1: Exploit Card Deck */}
-            <div className="exploit-deck" aria-label="Exploit Card Deck">
+            {/* Trick Cards Deck: 3 Rows (Who / Why / What) */}
+            <div className="exploit-deck" aria-label="Trick Cards Deck">
               <div className="deck-header">
-                <span className="deck-title">
-                  <span>🃏</span> Exploit Deck
-                </span>
-                <span className="deck-subhint">Stack a card from each color, then hit Send:</span>
+                <div className="deck-header-left">
+                  <span className="deck-title">
+                    <span>🃏</span> Trick Cards
+                  </span>
+                  <span className="deck-subhint text-sm text-dim">
+                    Pick 1 from each row (Who → Why → What), then hit Send:
+                  </span>
+                </div>
                 {input.trim() && (
                   <button
                     type="button"
-                    className="deck-clear-btn"
-                    onClick={() => setInput('')}
-                    title="Clear text in the input"
+                    className="deck-clear-btn text-sm"
+                    onClick={() => {
+                      setInput('')
+                      setSelectedCards({})
+                    }}
+                    title="Clear message box"
                   >
-                    Clear Input ✕
+                    Clear ✕
                   </button>
                 )}
               </div>
 
-              <div className="deck-cards-row">
-                {meta.cards.map((card) => {
-                  const typeClass = card.type.toLowerCase()
-                  const icon = card.type === 'PERSONA' ? '🎭' : card.type === 'FRAMING' ? '🧪' : '⚡'
+              <div className="deck-rows-container">
+                {(['PERSONA', 'FRAMING', 'ASK'] as const).map((step) => {
+                  const cfg = CARD_TYPE_CONFIG[step]
+                  const stepCards = meta.cards.filter((card) => card.type === step)
                   return (
-                    <button
-                      key={card.id}
-                      type="button"
-                      className={`trick-card ${typeClass}`}
-                      onClick={() => handleCardClick(card)}
-                      title={`Add: "${card.text}"`}
-                    >
-                      <span>{icon}</span>
-                      <span className="card-type-chip">{card.type}</span>
-                      <span>{card.label}</span>
-                    </button>
+                    <div key={step} className={`deck-category-row ${step.toLowerCase()}`}>
+                      <div className={`category-label text-sm ${step.toLowerCase()}`}>
+                        <span>{cfg.icon}</span>
+                        <span>{cfg.step}</span>
+                      </div>
+                      <div className="category-cards-grid">
+                        {stepCards.map((card) => {
+                          const typeClass = card.type.toLowerCase()
+                          const isSelected = selectedCards[card.type] === card.id || input.includes(card.text)
+                          return (
+                            <button
+                              key={card.id}
+                              type="button"
+                              className={`trick-card ${typeClass} ${isSelected ? 'selected' : ''}`}
+                              onClick={() => handleCardClick(card)}
+                              title={`Add: "${card.text}"`}
+                            >
+                              <span>{isSelected ? '✓ ' : ''}{card.label}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
                   )
                 })}
               </div>
@@ -775,13 +826,9 @@ export default function App() {
         </section>
 
         {/* Panel 3: Defense Lab & Inspector */}
-        <section className="panel defense-panel" aria-label="Defense Lab and Tool Inspector">
-          <div className="panel-header">
-            <span className="panel-title">🛡️ Safety Guard & Inspector</span>
-          </div>
-
-          {/* Defense Toggle */}
-          <div className="defense-toggle-card">
+        <section className="panel defense-panel" aria-label="Safety Guard and Inspector">
+          {/* Slim Guard Bar */}
+          <div className="guard-slim-bar">
             <div className="toggle-switch-wrapper">
               <label className="switch-label">
                 <input
@@ -794,139 +841,149 @@ export default function App() {
                   style={{ display: 'none' }}
                 />
                 <div className="switch-control" />
-                <span>Safety Guard</span>
+                <span className="guard-switch-title text-sm">Safety Guard</span>
               </label>
               <span className={`defense-badge-state ${defense ? 'defended' : 'vulnerable'}`}>
-                {defense ? 'GUARD UP' : 'OFF'}
+                {defense ? 'ON' : 'OFF'}
               </span>
             </div>
-
-            <div className="defense-explanation-box">
-              <strong>{meta.defense.title}</strong>
-              <div style={{ color: 'var(--text-muted)', marginBottom: 6 }}>
-                <strong>What the guard does: </strong>
-                {meta.defense.summary}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-dim)', borderTop: '1px solid var(--panel-border)', paddingTop: 6 }}>
-                <strong>Why the trick stops: </strong>
-                {meta.defense.details}
-              </div>
-              <div style={{ fontSize: 11, color: '#38bdf8', marginTop: 6, fontStyle: 'italic' }}>
-                💡 {meta.defense.analogy}
-              </div>
-            </div>
+            <p className="guard-one-liner text-sm">{meta.defense.summary}</p>
           </div>
 
-          {/* DEFENSE BLOCKED Prominent Banner */}
-          {defenseBlockEvents.length > 0 && (
-            <div className="guard-up-banner">
-              <div className="guard-up-title">
-                <span>🛡️</span> GUARD UP! The same trick bounced off.
-              </div>
-              <div className="guard-up-text">
-                {defenseBlockEvents[0]?.message}
-              </div>
-            </div>
-          )}
-
-          {/* Tool Call Inspector */}
-          <div className="inspector-card">
-            <div className="panel-title" style={{ fontSize: 12 }}>
-              ⚙️ Tool Call Inspector ({events.length})
-            </div>
-
-            <div className="inspector-feed">
-              {events.length === 0 ? (
-                <div style={{ color: 'var(--text-dim)', fontSize: 12, padding: 8 }}>
-                  No tools invoked in the last round. Send a prompt to observe agentic tool calls in real time.
+          <div className="disclosure-group">
+            {/* How guard works */}
+            <details className="disclosure-card">
+              <summary className="disclosure-summary">
+                <span>🛡️ How this guard works</span>
+              </summary>
+              <div className="disclosure-content">
+                <div className="defense-mini-box">
+                  <strong className="text-sm">{meta.defense.title}</strong>
+                  <p className="text-sm text-muted" style={{ margin: '4px 0' }}>{meta.defense.details}</p>
+                  <div className="defense-analogy text-sm">💡 {meta.defense.analogy}</div>
                 </div>
-              ) : (
-                events.map((evt, idx) => {
-                  if (evt.type === 'tool_call') {
-                    return (
-                      <div key={idx} className="feed-event tool-call">
-                        <div className="event-header">
-                          <span className="event-type-call">⚡ TOOL CALL</span>
-                          <span>{evt.name}</span>
-                        </div>
-                        <div className="event-body">{JSON.stringify(evt.input, null, 2)}</div>
-                      </div>
-                    )
-                  }
+              </div>
+            </details>
 
-                  if (evt.type === 'tool_result') {
-                    return (
-                      <div key={idx} className={`feed-event tool-result ${evt.tainted ? 'tainted' : ''}`}>
-                        <div className="event-header">
-                          <span className={evt.tainted ? 'event-type-tainted' : 'event-type-result'}>
-                            {evt.tainted ? '⚠️ TAINTED RESULT' : '📥 TOOL RESULT'}
-                          </span>
-                          <span>{evt.name}</span>
-                        </div>
-                        {evt.tainted && (
-                          <div style={{ margin: '2px 0 4px 0' }}>
-                            <span className="dirty-data-badge">Dirty data: the assistant trusted this.</span>
-                          </div>
-                        )}
-                        <div className="event-body">{evt.output}</div>
-                      </div>
-                    )
-                  }
+            {/* DEFENSE BLOCKED Prominent Banner */}
+            {defenseBlockEvents.length > 0 && (
+              <div className="guard-up-banner">
+                <div className="guard-up-title text-sm">
+                  <span>🛡️</span> Guard Blocked This Trick
+                </div>
+                <div className="guard-up-text text-sm">
+                  {defenseBlockEvents[0]?.message}
+                </div>
+              </div>
+            )}
 
-                  if (evt.type === 'defense_block') {
-                    return (
-                      <div key={idx} className="feed-event defense-block">
-                        <div className="event-header">
-                          <span className="event-type-block">🛡️ DEFENSE BLOCK</span>
-                          <span>{evt.layer}</span>
-                        </div>
-                        <div className="event-body">{evt.message}</div>
-                      </div>
-                    )
-                  }
+            {/* Tool Call Inspector */}
+            <details
+              className="disclosure-card"
+              open={inspectorOpen}
+              onToggle={(e) => setInspectorOpen(e.currentTarget.open)}
+            >
+              <summary className="disclosure-summary">
+                <span>⚙️ See what the bot did</span>
+                <span className="disclosure-badge">
+                  {events.length} {events.length === 1 ? 'action' : 'actions'}
+                </span>
+              </summary>
+              <div className="disclosure-content">
+                <div className="inspector-feed">
+                  {events.length === 0 ? (
+                    <div className="text-sm text-dim" style={{ padding: 4 }}>
+                      No actions yet. Send a message to see tools and data behind the scenes.
+                    </div>
+                  ) : (
+                    events.map((evt, idx) => {
+                      if (evt.type === 'tool_call') {
+                        return (
+                          <div key={idx} className="feed-event tool-call">
+                            <div className="event-header text-sm">
+                              <span className="event-type-call">⚡ TOOL CALLED</span>
+                              <span>{evt.name}</span>
+                            </div>
+                            <div className="event-body text-sm">{JSON.stringify(evt.input, null, 2)}</div>
+                          </div>
+                        )
+                      }
 
-                  if (evt.type === 'pending_action') {
-                    return (
-                      <div key={idx} className="feed-event tool-call">
-                        <div className="event-header">
-                          <span style={{ color: '#fbbf24' }}>⏳ PENDING ACTION</span>
-                          <span>{evt.name}</span>
-                        </div>
-                        <div className="event-body">{JSON.stringify(evt.input, null, 2)}</div>
-                        <div className="pending-action-card">
-                          <div className="pending-title">
-                            <span>⚠️</span> Human Confirmation Required
+                      if (evt.type === 'tool_result') {
+                        return (
+                          <div key={idx} className={`feed-event tool-result ${evt.tainted ? 'tainted' : ''}`}>
+                            <div className="event-header text-sm">
+                              <span className={evt.tainted ? 'event-type-tainted' : 'event-type-result'}>
+                                {evt.tainted ? '⚠️ POISONED DATA' : '📥 TOOL DATA'}
+                              </span>
+                              <span>{evt.name}</span>
+                            </div>
+                            {evt.tainted && (
+                              <div style={{ margin: '2px 0 4px 0' }}>
+                                <span className="dirty-data-badge text-sm">Untrusted input: contains hidden instructions.</span>
+                              </div>
+                            )}
+                            <div className="event-body text-sm">{evt.output}</div>
                           </div>
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                            High-risk operation intercepted. Explicit dual-custody authorization required to execute.
-                          </div>
-                          <div className="pending-btn-row">
-                            <button
-                              type="button"
-                              className="approve-btn"
-                              disabled={busy}
-                              onClick={() => void handleApproveAction(evt.id, true)}
-                            >
-                              ✓ Approve & Execute
-                            </button>
-                            <button
-                              type="button"
-                              className="deny-btn"
-                              disabled={busy}
-                              onClick={() => void handleApproveAction(evt.id, false)}
-                            >
-                              ✕ Deny & Abort
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  }
+                        )
+                      }
 
-                  return null
-                })
-              )}
-            </div>
+                      if (evt.type === 'defense_block') {
+                        return (
+                          <div key={idx} className="feed-event defense-block">
+                            <div className="event-header text-sm">
+                              <span className="event-type-block">🛡️ BLOCKED BY GUARD</span>
+                              <span>{evt.layer}</span>
+                            </div>
+                            <div className="event-body text-sm">{evt.message}</div>
+                          </div>
+                        )
+                      }
+
+                      if (evt.type === 'pending_action') {
+                        return (
+                          <div key={idx} className="feed-event tool-call">
+                            <div className="event-header text-sm">
+                              <span className="text-amber">⏳ APPROVAL REQUIRED</span>
+                              <span>{evt.name}</span>
+                            </div>
+                            <div className="event-body text-sm">{JSON.stringify(evt.input, null, 2)}</div>
+                            <div className="pending-action-card">
+                              <div className="pending-title text-sm">
+                                <span>⚠️</span> Confirmation Required
+                              </div>
+                              <div className="text-sm text-muted">
+                                Dangerous action paused! Confirm before this action proceeds.
+                              </div>
+                              <div className="pending-btn-row">
+                                <button
+                                  type="button"
+                                  className="approve-btn text-sm"
+                                  disabled={busy}
+                                  onClick={() => void handleApproveAction(evt.id, true)}
+                                >
+                                  ✓ Approve
+                                </button>
+                                <button
+                                  type="button"
+                                  className="deny-btn text-sm"
+                                  disabled={busy}
+                                  onClick={() => void handleApproveAction(evt.id, false)}
+                                >
+                                  ✕ Deny
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      }
+
+                      return null
+                    })
+                  )}
+                </div>
+              </div>
+            </details>
           </div>
         </section>
       </main>
@@ -936,10 +993,10 @@ export default function App() {
         <div className="modal-overlay">
           <div className="replay-card">
             <div className="replay-header">
-              <div className="replay-title">
-                <span>🎬</span> Attack Replay: The Heist Step-by-Step
+              <div className="replay-title text-lg">
+                <span>🎬</span> Step-by-Step Replay
               </div>
-              <div className="replay-progress-chip">
+              <div className="replay-progress-chip text-sm">
                 Step {replayStep + 1} of {replayEvents.length}
               </div>
             </div>
@@ -947,8 +1004,8 @@ export default function App() {
             {/* Level 4 Wire Transfer Ticking Counter */}
             {currentLevel === 4 && (
               <div className="wire-transfer-counter">
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-main)' }}>
-                  💸 Unauthorized Funds Exfiltrated:
+                <span className="text-sm font-bold">
+                  💸 Unauthorized Money Transferred:
                 </span>
                 <span className="counter-amount">${replayDollars.toLocaleString()} USD</span>
               </div>
@@ -963,8 +1020,8 @@ export default function App() {
                   <div key={idx} className={`replay-step ${isActive ? 'active' : ''} ${isPast ? 'past' : ''}`}>
                     <div className="replay-step-icon">{info.icon}</div>
                     <div className="replay-step-content">
-                      <div className="replay-step-caption">{info.title}</div>
-                      {info.sub && <div className="replay-step-sub">{info.sub}</div>}
+                      <div className="replay-step-caption text-sm">{info.title}</div>
+                      {info.sub && <div className="replay-step-sub text-sm">{info.sub}</div>}
                     </div>
                   </div>
                 )
@@ -975,7 +1032,7 @@ export default function App() {
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   type="button"
-                  className="replay-btn"
+                  className="replay-btn text-sm"
                   onClick={() => {
                     setReplayStep(0)
                     setReplayPlaying(true)
@@ -985,40 +1042,40 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className="replay-btn"
+                  className="replay-btn text-sm"
                   onClick={() => setReplayPlaying(!replayPlaying)}
                 >
                   {replayPlaying ? '⏸ Pause' : '▶ Play'}
                 </button>
                 <button
                   type="button"
-                  className="replay-btn"
+                  className="replay-btn text-sm"
                   disabled={replayStep >= replayEvents.length - 1}
                   onClick={() => {
                     setReplayPlaying(false)
                     setReplayStep((prev) => Math.min(replayEvents.length - 1, prev + 1))
                   }}
                 >
-                  Next Step ⏭
+                  Next ⏭
                 </button>
               </div>
 
               <button
                 type="button"
-                className="replay-btn primary"
+                className="replay-btn primary text-sm"
                 onClick={() => {
                   setShowReplay(false)
                   setReplayPlaying(false)
                 }}
               >
-                Close Replay ✕
+                Close ✕
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Feature 2: Victory Modal with Loot Drop, Rank Title & CSS Confetti */}
+      {/* Feature 2: Victory Modal */}
       {showVictory && (
         <div className="modal-overlay">
           <div className="victory-card">
@@ -1037,93 +1094,91 @@ export default function App() {
               ))}
             </div>
 
-            <div style={{ fontSize: 44 }}>🏆</div>
-            <h2 className="victory-title">CTF CHALLENGE COMPLETED!</h2>
+            <div style={{ fontSize: 40 }}>🏆</div>
+            <h2 className="victory-title text-lg">All Challenges Completed!</h2>
 
-            {/* Rank Title Based on Score */}
-            <div className="rank-badge">
-              <span>🎖️ Rank Achieved:</span>
-              <span style={{ color: 'var(--accent-cyan)' }}>{getRankTitle(totalScore)}</span>
-            </div>
-
-            <p className="victory-subtitle">AI Security Engineer Certification Ready</p>
-
-            <div className="victory-stats">
-              <div className="victory-stat-item">
-                <strong>4 / 4</strong>
-                <span>Levels Solved</span>
-              </div>
-              <div className="victory-stat-item">
-                <strong>{totalScore}</strong>
-                <span>Final Score</span>
-              </div>
+            {/* Rank Title */}
+            <div className="rank-badge text-sm">
+              <span>Rank:</span>
+              <span className="text-cyan font-bold">{getRankTitle(totalScore)}</span>
             </div>
 
             {/* Loot Drop Section */}
             <div className="loot-drop-card">
-              <span className="loot-label">🎁 Trophy Loot Drop Captured:</span>
-              <span className="loot-flag">{capturedFlags[4] || capturedFlags[1] || 'FLAG{all_levels_conquered_2026}'}</span>
+              <span className="loot-label text-sm">Secret Passcode Captured</span>
+              <span className="loot-flag text-sm">
+                {capturedFlags[4] || capturedFlags[1] || 'FLAG{all_levels_conquered_2026}'}
+              </span>
             </div>
 
-            {/* Replay Option */}
-            {events.length > 0 && (
+            {/* Two Primary Action Buttons */}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', margin: '4px 0' }}>
               <button
                 type="button"
-                className="replay-btn primary"
-                style={{ alignSelf: 'center' }}
+                className="replay-btn primary text-sm"
                 onClick={() => {
                   setShowVictory(false)
-                  startReplay()
+                  selectLevel(1)
                 }}
               >
-                🎬 Replay the Heist
+                ↻ Play Again
               </button>
-            )}
-
-            {refereeVerdict && (
-              <div
-                style={{
-                  background: 'rgba(99, 102, 241, 0.1)',
-                  border: '1px solid rgba(99, 102, 241, 0.3)',
-                  borderRadius: 8,
-                  padding: 12,
-                  textAlign: 'left',
-                  fontSize: 12,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <strong>⚖️ Guild Referee Evaluation:</strong>
-                  <span className={`verdict-chip ${refereeVerdict.verdict}`}>{refereeVerdict.verdict}</span>
-                </div>
-                <div style={{ marginBottom: 4 }}>
-                  <strong>Technique:</strong> {refereeVerdict.technique}
-                </div>
-                <div style={{ marginBottom: 4 }}>
-                  <strong>Takeaway:</strong> {refereeVerdict.takeaway}
-                </div>
-                <a
-                  href="https://app.guild.ai/users/ali-mo/workspaces/agentbreaker"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="referee-link"
+              {events.length > 0 && (
+                <button
+                  type="button"
+                  className="replay-btn text-sm"
+                  onClick={() => {
+                    setShowVictory(false)
+                    startReplay()
+                  }}
                 >
-                  Judged by a Guild agent (ali-mo~agentbreaker-referee) ↗
-                </a>
-              </div>
-            )}
-
-            <div style={{ textAlign: 'left', fontSize: 12, color: 'var(--text-muted)' }}>
-              <strong>Safety Guards Mastered:</strong>
-              <ul style={{ margin: '8px 0 0 16px', padding: 0, lineHeight: 1.6 }}>
-                <li>OWASP LLM01: Prompt Injection & Output Filtering</li>
-                <li>OWASP LLM02: Dual-LLM Quarantine & Data Delimiters</li>
-                <li>OWASP LLM07: MCP Manifest Sanitizer & Schema Sandbox</li>
-                <li>OWASP LLM06: Human-in-the-Loop Confirmation Gates</li>
-              </ul>
+                  🎬 Replay
+                </button>
+              )}
             </div>
 
-            <button type="button" className="close-modal-btn" onClick={() => setShowVictory(false)}>
-              Back to Arena
+            {/* Details behind 'What happened?' */}
+            <details className="disclosure-card" style={{ width: '100%', textAlign: 'left' }}>
+              <summary className="disclosure-summary">
+                <span>What happened?</span>
+              </summary>
+              <div className="disclosure-content">
+                <div className="victory-stats">
+                  <div className="victory-stat-item">
+                    <strong>4 / 4</strong>
+                    <span className="text-sm text-dim">Levels Solved</span>
+                  </div>
+                  <div className="victory-stat-item">
+                    <strong>{totalScore}</strong>
+                    <span className="text-sm text-dim">Final Score</span>
+                  </div>
+                </div>
+
+                {refereeVerdict && (
+                  <div className="referee-body text-sm" style={{ background: 'rgba(99, 102, 241, 0.1)', padding: 10, borderRadius: 6 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <strong>AI Judge:</strong>
+                      <span className={`verdict-chip ${refereeVerdict.verdict}`}>{refereeVerdict.verdict}</span>
+                    </div>
+                    <div><strong>Strategy:</strong> {refereeVerdict.technique}</div>
+                    <div><strong>Takeaway:</strong> {refereeVerdict.takeaway}</div>
+                  </div>
+                )}
+
+                <div className="text-sm text-muted">
+                  <strong>Guards Mastered:</strong>
+                  <ul style={{ margin: '6px 0 0 16px', padding: 0, lineHeight: 1.5 }}>
+                    <li>Prompt Injection Defense (OWASP LLM01)</li>
+                    <li>Document Quarantine (OWASP LLM02)</li>
+                    <li>Plugin Sanitizer (OWASP LLM07)</li>
+                    <li>Human Confirmation Gates (OWASP LLM06)</li>
+                  </ul>
+                </div>
+              </div>
+            </details>
+
+            <button type="button" className="close-modal-btn text-sm" onClick={() => setShowVictory(false)}>
+              Back to Challenges
             </button>
           </div>
         </div>
