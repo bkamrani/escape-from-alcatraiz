@@ -46,15 +46,19 @@ const GUILD_AGENT_ID = '01a0ee36-60e3-726e-0000-981dc7cf8cca'
 const GUILD_API_URL = 'https://app.guild.ai/api'
 
 export function parseRefereeReply(rawText: string): RefereeVerdict {
-  const verdictMatch = rawText.match(/VERDICT:\s*([a-zA-Z-]+)/i)
-  const techniqueMatch = rawText.match(/TECHNIQUE:\s*([^\n]+)/i)
-  const pointsMatch = rawText.match(/POINTS:\s*(\d+)/i)
-  const takeawayMatch = rawText.match(/TAKEAWAY:\s*([^\n]+(?:\n[^\n]+)?)/i)
+  const verdictMatch = rawText.match(/(?:VERDICT:|\*{0,2}Verdict:\*{0,2})\s*([a-zA-Z -]+)/i)
+  const techniqueMatch = rawText.match(/(?:TECHNIQUE:|\*{0,2}(?:Attack\s+)?Technique:\*{0,2})\s*([^\n*]+)/i)
+  const pointsMatch = rawText.match(/(?:POINTS:|\*{0,2}Points(?:\s+Awarded)?:\*{0,2})\s*(\d+)/i)
+  const takeawayMatch = rawText.match(/(?:TAKEAWAY:|\*{0,2}Key Takeaway[^:]*:\*{0,2})\s*([^\n]+(?:\n[^\n]+)?)/i)
 
   let verdict: 'legitimate-solve' | 'blocked-by-defense' | 'no-solve' = 'no-solve'
-  const v = (verdictMatch ? verdictMatch[1] : '').toLowerCase().trim()
-  if (v === 'legitimate-solve' || v === 'blocked-by-defense' || v === 'no-solve') {
-    verdict = v
+  const v = (verdictMatch ? verdictMatch[1] : '').toLowerCase().trim().replace(/\s+/g, '-')
+  if (v.includes('legitimate-solve')) {
+    verdict = 'legitimate-solve'
+  } else if (v.includes('blocked')) {
+    verdict = 'blocked-by-defense'
+  } else if (v.includes('no-solve')) {
+    verdict = 'no-solve'
   }
 
   const rawTechnique = (techniqueMatch ? techniqueMatch[1] : 'unspecified').trim()

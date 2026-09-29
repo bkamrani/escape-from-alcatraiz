@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { LEVELS, type LevelMeta } from './levels.ts'
+import { LEVELS, type ExploitCard, type LevelMeta } from './levels.ts'
 
 type Msg = { role: 'user' | 'assistant'; content: string }
 
@@ -17,6 +17,32 @@ interface RefereeVerdict {
   takeaway: string
   source: 'guild' | 'offline'
 }
+
+function getRankTitle(score: number): string {
+  if (score >= 1000) return 'Agent Breaker'
+  if (score >= 700) return 'Agent Whisperer'
+  if (score >= 300) return 'Prompt Poker'
+  return 'Script Kiddie'
+}
+
+const SUSPICIOUS_WORDS = [
+  'vault',
+  'code block',
+  'raw',
+  'debug',
+  'ticket',
+  'approv',
+  'override',
+  'secret',
+  'pretend',
+  'receipt',
+  'sync',
+  'bypass',
+  'directive',
+  'wire_transfer',
+  'read_vault',
+  'read_secrets',
+]
 
 export default function App() {
   const queryParams = useMemo(() => new URLSearchParams(window.location.search), [])
@@ -38,6 +64,16 @@ export default function App() {
   const [showVictory, setShowVictory] = useState(false)
   const [refereeLoading, setRefereeLoading] = useState(false)
   const [refereeVerdict, setRefereeVerdict] = useState<RefereeVerdict | null>(null)
+
+  // Replay State
+  const [showReplay, setShowReplay] = useState(false)
+  const [replayEvents, setReplayEvents] = useState<InspectorEvent[]>([])
+  const [replayStep, setReplayStep] = useState(0)
+  const [replayPlaying, setReplayPlaying] = useState(false)
+  const [replayDollars, setReplayDollars] = useState(0)
+
+  // Track latest won state for quick replay
+  const [roundWon, setRoundWon] = useState(false)
 
   const meta: LevelMeta = LEVELS[currentLevel]
 
@@ -63,6 +99,17 @@ export default function App() {
     return Math.max(0, score)
   }, [solvedLevels, revealedHints])
 
+  // Suspicion score based on input text
+  const suspicionScore = useMemo(() => {
+    const lower = input.toLowerCase()
+    if (!lower.trim()) return 0
+    let matches = 0
+    for (const kw of SUSPICIOUS_WORDS) {
+      if (lower.includes(kw)) matches++
+    }
+    return Math.min(100, Math.round((matches / 3) * 100))
+  }, [input])
+
   const selectLevel = (lvl: 1 | 2 | 3 | 4) => {
     setCurrentLevel(lvl)
     setMessages([])
@@ -71,6 +118,8 @@ export default function App() {
     setManualFlag('')
     setRefereeVerdict(null)
     setRefereeLoading(false)
+    setShowReplay(false)
+    setRoundWon(false)
   }
 
   const resetCurrentLevel = () => {
@@ -81,6 +130,8 @@ export default function App() {
     setDefense(false)
     setRefereeVerdict(null)
     setRefereeLoading(false)
+    setShowReplay(false)
+    setRoundWon(false)
   }
 
   const requestRefereeVerdict = async (
@@ -143,6 +194,7 @@ export default function App() {
     setInput('')
     setBusy(true)
     setFlagStatus(null)
+    setRoundWon(false)
     setLevelAttempts((prev) => ({ ...prev, [currentLevel]: (prev[currentLevel] || 0) + 1 }))
 
     try {
@@ -161,6 +213,7 @@ export default function App() {
       const userTurns = next.filter((m) => m.role === 'user').map((m) => m.content)
 
       if (data.won) {
+        setRoundWon(true)
         setSolvedLevels((prev) => new Set([...prev, currentLevel]))
         if (data.flag) {
           setCapturedFlags((prev) => ({ ...prev, [currentLevel]: data.flag }))
@@ -193,6 +246,7 @@ export default function App() {
       const data = await r.json()
       if (data.correct) {
         setFlagStatus({ success: true, msg: '🚩 Correct flag captured!' })
+        setRoundWon(true)
         setSolvedLevels((prev) => new Set([...prev, currentLevel]))
         setCapturedFlags((prev) => ({ ...prev, [currentLevel]: flagToTest }))
         if (currentLevel === 4) setShowVictory(true)
@@ -244,6 +298,66 @@ export default function App() {
     setInput(meta.demoPayload)
   }
 
+  // Exploit Card Click: appends cleanly to input
+  const handleCardClick = (card: ExploitCard) => {
+    setInput((prev) => {
+      const trimmed = prev.trim()
+      if (!trimmed) return card.text
+      if (card.text.startsWith('[') || trimmed.endsWith('\n')) {
+        return trimmed + '\n' + card.text
+      }
+      return trimmed + ' ' + card.text
+    })
+  }
+
+  // Attack Replay Logic
+  const startReplay = (targetEvts?: InspectorEvent[]) => {
+    const evts = targetEvts || events
+    if (evts.length === 0) return
+    setReplayEvents(evts)
+    setReplayStep(0)
+    setReplayDollars(0)
+    setShowReplay(true)
+    setReplayPlaying(true)
+  }
+
+  // Auto-advance timeline step every ~700ms
+  useEffect(() => {
+    if (!showReplay || !replayPlaying) return
+    if (replayStep >= replayEvents.length - 1) return
+
+    const timer = setTimeout(() => {
+      setReplayStep((prev) => {
+        const next = prev + 1
+        if (next >= replayEvents.length - 1) {
+          setReplayPlaying(false)
+        }
+        return next
+      })
+    }, 700)
+    return () => clearTimeout(timer)
+  }, [showReplay, replayPlaying, replayStep, replayEvents.length])
+
+  // Ticking dollar counter for Level 4 wire transfer event
+  useEffect(() => {
+    if (!showReplay) return
+    const currentEvt = replayEvents[replayStep]
+    const isWire = currentEvt && 'name' in currentEvt && currentEvt.name === 'send_wire_transfer'
+    if (isWire) {
+      let current = 0
+      const counterTimer = setInterval(() => {
+        current += 2500
+        if (current >= 25000) {
+          setReplayDollars(25000)
+          clearInterval(counterTimer)
+        } else {
+          setReplayDollars(current)
+        }
+      }, 40)
+      return () => clearInterval(counterTimer)
+    }
+  }, [showReplay, replayStep, replayEvents])
+
   // Auto-scroll chat to bottom
   useEffect(() => {
     const el = document.getElementById('chat-scroll-target')
@@ -256,6 +370,49 @@ export default function App() {
     return solvedLevels.has(lvl - 1)
   }
 
+  const getReplayStepInfo = (evt: InspectorEvent) => {
+    if (evt.type === 'tool_call') {
+      return {
+        icon: '⚡',
+        title: `The assistant reached for: ${evt.name}`,
+        sub: `Parameters: ${JSON.stringify(evt.input)}`,
+      }
+    }
+    if (evt.type === 'tool_result') {
+      if (evt.tainted) {
+        return {
+          icon: '⚠️',
+          title: `It trusted poisoned data from: ${evt.name}`,
+          sub: evt.output.slice(0, 140),
+        }
+      }
+      return {
+        icon: '📥',
+        title: `Tool responded with clean data: ${evt.name}`,
+        sub: evt.output.slice(0, 140),
+      }
+    }
+    if (evt.type === 'defense_block') {
+      return {
+        icon: '🛡️',
+        title: `A safety guard stepped in: ${evt.layer}`,
+        sub: evt.message,
+      }
+    }
+    if (evt.type === 'pending_action') {
+      return {
+        icon: '👤',
+        title: `A human was asked to approve: ${evt.name}`,
+        sub: 'High-risk action held in queue until administrator confirmation.',
+      }
+    }
+    return {
+      icon: 'ℹ️',
+      title: 'Action recorded in audit log',
+      sub: '',
+    }
+  }
+
   return (
     <div className="game-shell">
       {/* Top Navigation */}
@@ -264,7 +421,7 @@ export default function App() {
           <div className="brand-logo">
             <span>☠</span> AGENTBREAKER
           </div>
-          <span className="brand-badge">CTF · OWASP LLM Top 10</span>
+          <span className="brand-badge">CTF · AI Security Lab</span>
         </div>
 
         <div className="level-selector-bar">
@@ -309,13 +466,19 @@ export default function App() {
 
           <div className="mission-card">
             <h2 className="level-title-large">{meta.name}</h2>
+            <div style={{ fontSize: 12, color: 'var(--accent-cyan)', marginBottom: 8, fontWeight: 600 }}>
+              {meta.subtitle}
+            </div>
+
             <div className="badge-row">
-              <span className="owasp-badge">{meta.owasp}</span>
-              <span className="points-badge">{meta.points} Pts</span>
+              <span className="owasp-badge" title={meta.owaspPlain}>
+                {meta.owasp}
+              </span>
+              <span className="points-badge">+{meta.points} Pts</span>
             </div>
 
             <div className="objective-box">
-              <strong>Objective:</strong>
+              <strong>Your Mission:</strong>
               {meta.objective}
             </div>
 
@@ -325,7 +488,7 @@ export default function App() {
           {/* Tiered Hints */}
           <div className="hints-card">
             <div className="panel-title" style={{ fontSize: 12 }}>
-              💡 Tactical Intel (Tiered Hints)
+              💡 Tactical Intel (Hints)
             </div>
 
             {meta.hints.map((h) => {
@@ -366,6 +529,14 @@ export default function App() {
                 <div style={{ marginTop: 4, fontFamily: 'var(--font-mono)' }}>
                   Flag: {capturedFlags[currentLevel] || 'Captured'}
                 </div>
+                <button
+                  type="button"
+                  className="replay-trigger-btn"
+                  style={{ marginTop: 8 }}
+                  onClick={() => startReplay()}
+                >
+                  🎬 Replay the Heist
+                </button>
               </div>
             ) : (
               <form className="flag-form" onSubmit={submitManualFlag}>
@@ -463,7 +634,7 @@ export default function App() {
               </div>
             </div>
             <div className={`defense-badge-state ${defense ? 'defended' : 'vulnerable'}`}>
-              <span>{defense ? '🛡️ DEFENDED' : '🔴 VULNERABLE'}</span>
+              <span>{defense ? '🛡️ GUARD UP' : '🔴 VULNERABLE'}</span>
             </div>
           </div>
 
@@ -473,7 +644,7 @@ export default function App() {
                 <div style={{ fontSize: 32 }}>⚡</div>
                 <div>Connection established with {meta.botName}.</div>
                 <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-                  Craft your injection payload or use the hint intel to trigger a tool exploit.
+                  Stack trick cards below to compose your attack, or type a custom prompt.
                 </div>
               </div>
             ) : (
@@ -488,6 +659,21 @@ export default function App() {
                 )
               })
             )}
+
+            {/* Playful Win Micro-Copy Toast */}
+            {roundWon && (
+              <div className="win-toast">
+                <div className="win-toast-msg">
+                  <span>🏆</span> Nice. The bot just betrayed its owner!
+                </div>
+                {events.length > 0 && (
+                  <button type="button" className="replay-trigger-btn" onClick={() => startReplay()}>
+                    🎬 Replay the Heist
+                  </button>
+                )}
+              </div>
+            )}
+
             {busy && (
               <div className="chat-msg assistant">
                 <span className="msg-sender">{meta.botName}</span>
@@ -500,6 +686,22 @@ export default function App() {
           </div>
 
           <div className="chat-input-bar">
+            {/* Suspicion Meter (Cosmetic) */}
+            <div className="suspicion-bar-wrap">
+              <span className="suspicion-label">
+                Bot Suspicion:{' '}
+                {suspicionScore < 30 ? '🟢 Normal' : suspicionScore < 65 ? '🟡 Guarded' : '🔴 High Alert'}
+              </span>
+              <div className="suspicion-track" title="Real-time heuristic analysis of your prompt keywords">
+                <div
+                  className={`suspicion-fill ${
+                    suspicionScore < 30 ? 'low' : suspicionScore < 65 ? 'medium' : 'high'
+                  }`}
+                  style={{ width: `${Math.max(8, suspicionScore)}%` }}
+                />
+              </div>
+            </div>
+
             <form
               className="input-form"
               onSubmit={(e) => {
@@ -521,7 +723,7 @@ export default function App() {
                     void send()
                   }
                 }}
-                placeholder={`Attack ${meta.botName} (press Enter to send)…`}
+                placeholder={`Attack ${meta.botName} (stack cards below or type)…`}
                 rows={1}
                 disabled={busy}
               />
@@ -529,13 +731,53 @@ export default function App() {
                 Send
               </button>
             </form>
+
+            {/* Feature 1: Exploit Card Deck */}
+            <div className="exploit-deck" aria-label="Exploit Card Deck">
+              <div className="deck-header">
+                <span className="deck-title">
+                  <span>🃏</span> Exploit Deck
+                </span>
+                <span className="deck-subhint">Stack a card from each color, then hit Send:</span>
+                {input.trim() && (
+                  <button
+                    type="button"
+                    className="deck-clear-btn"
+                    onClick={() => setInput('')}
+                    title="Clear text in the input"
+                  >
+                    Clear Input ✕
+                  </button>
+                )}
+              </div>
+
+              <div className="deck-cards-row">
+                {meta.cards.map((card) => {
+                  const typeClass = card.type.toLowerCase()
+                  const icon = card.type === 'PERSONA' ? '🎭' : card.type === 'FRAMING' ? '🧪' : '⚡'
+                  return (
+                    <button
+                      key={card.id}
+                      type="button"
+                      className={`trick-card ${typeClass}`}
+                      onClick={() => handleCardClick(card)}
+                      title={`Add: "${card.text}"`}
+                    >
+                      <span>{icon}</span>
+                      <span className="card-type-chip">{card.type}</span>
+                      <span>{card.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           </div>
         </section>
 
         {/* Panel 3: Defense Lab & Inspector */}
         <section className="panel defense-panel" aria-label="Defense Lab and Tool Inspector">
           <div className="panel-header">
-            <span className="panel-title">🛡️ Defense Lab & Inspector</span>
+            <span className="panel-title">🛡️ Safety Guard & Inspector</span>
           </div>
 
           {/* Defense Toggle */}
@@ -552,29 +794,36 @@ export default function App() {
                   style={{ display: 'none' }}
                 />
                 <div className="switch-control" />
-                <span>Defense Mitigation</span>
+                <span>Safety Guard</span>
               </label>
               <span className={`defense-badge-state ${defense ? 'defended' : 'vulnerable'}`}>
-                {defense ? 'ACTIVE' : 'OFF'}
+                {defense ? 'GUARD UP' : 'OFF'}
               </span>
             </div>
 
             <div className="defense-explanation-box">
               <strong>{meta.defense.title}</strong>
-              <div style={{ color: 'var(--text-muted)', marginBottom: 6 }}>{meta.defense.summary}</div>
+              <div style={{ color: 'var(--text-muted)', marginBottom: 6 }}>
+                <strong>What the guard does: </strong>
+                {meta.defense.summary}
+              </div>
               <div style={{ fontSize: 11, color: 'var(--text-dim)', borderTop: '1px solid var(--panel-border)', paddingTop: 6 }}>
+                <strong>Why the trick stops: </strong>
                 {meta.defense.details}
+              </div>
+              <div style={{ fontSize: 11, color: '#38bdf8', marginTop: 6, fontStyle: 'italic' }}>
+                💡 {meta.defense.analogy}
               </div>
             </div>
           </div>
 
           {/* DEFENSE BLOCKED Prominent Banner */}
           {defenseBlockEvents.length > 0 && (
-            <div className="defense-blocked-banner">
-              <div className="defense-blocked-header">
-                <span>🛡️</span> DEFENSE BLOCKED
+            <div className="guard-up-banner">
+              <div className="guard-up-title">
+                <span>🛡️</span> GUARD UP! The same trick bounced off.
               </div>
-              <div className="defense-blocked-msg">
+              <div className="guard-up-text">
                 {defenseBlockEvents[0]?.message}
               </div>
             </div>
@@ -614,6 +863,11 @@ export default function App() {
                           </span>
                           <span>{evt.name}</span>
                         </div>
+                        {evt.tainted && (
+                          <div style={{ margin: '2px 0 4px 0' }}>
+                            <span className="dirty-data-badge">Dirty data: the assistant trusted this.</span>
+                          </div>
+                        )}
                         <div className="event-body">{evt.output}</div>
                       </div>
                     )
@@ -677,12 +931,121 @@ export default function App() {
         </section>
       </main>
 
-      {/* Victory Modal */}
+      {/* Feature 3: Attack Replay Modal ("What just happened?") */}
+      {showReplay && replayEvents.length > 0 && (
+        <div className="modal-overlay">
+          <div className="replay-card">
+            <div className="replay-header">
+              <div className="replay-title">
+                <span>🎬</span> Attack Replay: The Heist Step-by-Step
+              </div>
+              <div className="replay-progress-chip">
+                Step {replayStep + 1} of {replayEvents.length}
+              </div>
+            </div>
+
+            {/* Level 4 Wire Transfer Ticking Counter */}
+            {currentLevel === 4 && (
+              <div className="wire-transfer-counter">
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-main)' }}>
+                  💸 Unauthorized Funds Exfiltrated:
+                </span>
+                <span className="counter-amount">${replayDollars.toLocaleString()} USD</span>
+              </div>
+            )}
+
+            <div className="replay-timeline">
+              {replayEvents.map((evt, idx) => {
+                const info = getReplayStepInfo(evt)
+                const isActive = idx === replayStep
+                const isPast = idx < replayStep
+                return (
+                  <div key={idx} className={`replay-step ${isActive ? 'active' : ''} ${isPast ? 'past' : ''}`}>
+                    <div className="replay-step-icon">{info.icon}</div>
+                    <div className="replay-step-content">
+                      <div className="replay-step-caption">{info.title}</div>
+                      {info.sub && <div className="replay-step-sub">{info.sub}</div>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="replay-controls">
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  className="replay-btn"
+                  onClick={() => {
+                    setReplayStep(0)
+                    setReplayPlaying(true)
+                  }}
+                >
+                  ↺ Restart
+                </button>
+                <button
+                  type="button"
+                  className="replay-btn"
+                  onClick={() => setReplayPlaying(!replayPlaying)}
+                >
+                  {replayPlaying ? '⏸ Pause' : '▶ Play'}
+                </button>
+                <button
+                  type="button"
+                  className="replay-btn"
+                  disabled={replayStep >= replayEvents.length - 1}
+                  onClick={() => {
+                    setReplayPlaying(false)
+                    setReplayStep((prev) => Math.min(replayEvents.length - 1, prev + 1))
+                  }}
+                >
+                  Next Step ⏭
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className="replay-btn primary"
+                onClick={() => {
+                  setShowReplay(false)
+                  setReplayPlaying(false)
+                }}
+              >
+                Close Replay ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feature 2: Victory Modal with Loot Drop, Rank Title & CSS Confetti */}
       {showVictory && (
         <div className="modal-overlay">
           <div className="victory-card">
-            <div style={{ fontSize: 48 }}>🏆</div>
+            {/* CSS-Only Confetti Particles */}
+            <div className="confetti-container" aria-hidden="true">
+              {Array.from({ length: 16 }).map((_, i) => (
+                <span
+                  key={i}
+                  className="confetti-piece"
+                  style={{
+                    left: `${(i * 6.25) % 100}%`,
+                    animationDelay: `${(i * 0.16) % 2.4}s`,
+                    backgroundColor: ['#06b6d4', '#10b981', '#f43f5e', '#6366f1', '#fbbf24', '#a855f7'][i % 6],
+                  }}
+                />
+              ))}
+            </div>
+
+            <div style={{ fontSize: 44 }}>🏆</div>
             <h2 className="victory-title">CTF CHALLENGE COMPLETED!</h2>
+
+            {/* Rank Title Based on Score */}
+            <div className="rank-badge">
+              <span>🎖️ Rank Achieved:</span>
+              <span style={{ color: 'var(--accent-cyan)' }}>{getRankTitle(totalScore)}</span>
+            </div>
+
             <p className="victory-subtitle">AI Security Engineer Certification Ready</p>
 
             <div className="victory-stats">
@@ -695,6 +1058,27 @@ export default function App() {
                 <span>Final Score</span>
               </div>
             </div>
+
+            {/* Loot Drop Section */}
+            <div className="loot-drop-card">
+              <span className="loot-label">🎁 Trophy Loot Drop Captured:</span>
+              <span className="loot-flag">{capturedFlags[4] || capturedFlags[1] || 'FLAG{all_levels_conquered_2026}'}</span>
+            </div>
+
+            {/* Replay Option */}
+            {events.length > 0 && (
+              <button
+                type="button"
+                className="replay-btn primary"
+                style={{ alignSelf: 'center' }}
+                onClick={() => {
+                  setShowVictory(false)
+                  startReplay()
+                }}
+              >
+                🎬 Replay the Heist
+              </button>
+            )}
 
             {refereeVerdict && (
               <div
@@ -729,7 +1113,7 @@ export default function App() {
             )}
 
             <div style={{ textAlign: 'left', fontSize: 12, color: 'var(--text-muted)' }}>
-              <strong>Mitigations Mastered:</strong>
+              <strong>Safety Guards Mastered:</strong>
               <ul style={{ margin: '8px 0 0 16px', padding: 0, lineHeight: 1.6 }}>
                 <li>OWASP LLM01: Prompt Injection & Output Filtering</li>
                 <li>OWASP LLM02: Dual-LLM Quarantine & Data Delimiters</li>
@@ -738,7 +1122,7 @@ export default function App() {
               </ul>
             </div>
 
-            <button className="close-modal-btn" onClick={() => setShowVictory(false)}>
+            <button type="button" className="close-modal-btn" onClick={() => setShowVictory(false)}>
               Back to Arena
             </button>
           </div>
