@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import express from 'express'
 import { getLevel, pendingActions, prunePendingActions, type InspectorEvent, type ToolContext } from './levels/index.ts'
+import { handleReferee } from './referee.ts'
 
 const MODEL = process.env.MODEL ?? 'claude-haiku-4-5-20251001'
 // Reads ANTHROPIC_API_KEY from env, server-side only. Keys not scoped to a workspace
@@ -197,6 +198,8 @@ app.post('/api/flag', (req, res) => {
   const correct = flag.trim() === levelDef.flag
   res.json({ correct })
 })
+
+app.post('/api/referee', handleReferee)
 
 const port = Number(process.env.PORT ?? 3001)
 app.listen(port, () => console.log(`api on :${port}`))

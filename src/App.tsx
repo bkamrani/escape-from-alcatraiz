@@ -10,6 +10,14 @@ type InspectorEvent =
   | { type: 'defense_block'; layer: string; message: string }
   | { type: 'pending_action'; id: string; name: string; input: Record<string, unknown> }
 
+interface RefereeVerdict {
+  verdict: 'legitimate-solve' | 'blocked-by-defense' | 'no-solve'
+  technique: string
+  points: number
+  takeaway: string
+  source: 'guild' | 'offline'
+}
+
 export default function App() {
   const queryParams = useMemo(() => new URLSearchParams(window.location.search), [])
   const isUnlockAll = queryParams.get('unlock') === 'all'
@@ -24,9 +32,12 @@ export default function App() {
   const [solvedLevels, setSolvedLevels] = useState<Set<number>>(new Set())
   const [capturedFlags, setCapturedFlags] = useState<Record<number, string>>({})
   const [revealedHints, setRevealedHints] = useState<Record<number, number>>({ 1: 0, 2: 0, 3: 0, 4: 0 })
+  const [levelAttempts, setLevelAttempts] = useState<Record<number, number>>({ 1: 0, 2: 0, 3: 0, 4: 0 })
   const [manualFlag, setManualFlag] = useState('')
   const [flagStatus, setFlagStatus] = useState<{ success: boolean; msg: string } | null>(null)
   const [showVictory, setShowVictory] = useState(false)
+  const [refereeLoading, setRefereeLoading] = useState(false)
+  const [refereeVerdict, setRefereeVerdict] = useState<RefereeVerdict | null>(null)
 
   const meta: LevelMeta = LEVELS[currentLevel]
 
@@ -58,6 +69,8 @@ export default function App() {
     setEvents([])
     setFlagStatus(null)
     setManualFlag('')
+    setRefereeVerdict(null)
+    setRefereeLoading(false)
   }
 
   const resetCurrentLevel = () => {
@@ -66,6 +79,59 @@ export default function App() {
     setFlagStatus(null)
     setManualFlag('')
     setDefense(false)
+    setRefereeVerdict(null)
+    setRefereeLoading(false)
+  }
+
+  const requestRefereeVerdict = async (
+    isWon: boolean,
+    isDefense: boolean,
+    userMsgs: string[],
+    currentEvts: InspectorEvent[]
+  ) => {
+    setRefereeLoading(true)
+    try {
+      const attempts = (levelAttempts[currentLevel] || 0) + 1
+      const hintsCount = revealedHints[currentLevel] || 0
+      const resp = await fetch('/api/referee', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          level: currentLevel,
+          defense: isDefense,
+          won: isWon,
+          attempts,
+          hintsUsed: hintsCount,
+          messages: userMsgs,
+          events: currentEvts.map((e) => ({
+            type: e.type,
+            name: 'name' in e ? e.name : undefined,
+          })),
+        }),
+      })
+      if (!resp.ok) {
+        setRefereeVerdict({
+          verdict: 'no-solve',
+          technique: 'unspecified',
+          points: 0,
+          takeaway: 'Referee service unavailable.',
+          source: 'offline',
+        })
+        return
+      }
+      const verdictData = (await resp.json()) as RefereeVerdict
+      setRefereeVerdict(verdictData)
+    } catch {
+      setRefereeVerdict({
+        verdict: 'no-solve',
+        technique: 'unspecified',
+        points: 0,
+        takeaway: 'Referee service unreachable.',
+        source: 'offline',
+      })
+    } finally {
+      setRefereeLoading(false)
+    }
   }
 
   const send = async () => {
@@ -77,6 +143,7 @@ export default function App() {
     setInput('')
     setBusy(true)
     setFlagStatus(null)
+    setLevelAttempts((prev) => ({ ...prev, [currentLevel]: (prev[currentLevel] || 0) + 1 }))
 
     try {
       const r = await fetch('/api/chat', {
@@ -88,7 +155,10 @@ export default function App() {
       if (!r.ok) throw new Error(data.error ?? 'Request failed')
 
       setMessages([...next, { role: 'assistant', content: data.reply }])
-      setEvents(data.events || [])
+      const receivedEvents: InspectorEvent[] = data.events || []
+      setEvents(receivedEvents)
+
+      const userTurns = next.filter((m) => m.role === 'user').map((m) => m.content)
 
       if (data.won) {
         setSolvedLevels((prev) => new Set([...prev, currentLevel]))
@@ -98,6 +168,9 @@ export default function App() {
         if (currentLevel === 4) {
           setShowVictory(true)
         }
+        void requestRefereeVerdict(true, defense, userTurns, receivedEvents)
+      } else if (defense && receivedEvents.some((e) => e.type === 'defense_block')) {
+        void requestRefereeVerdict(false, true, userTurns, receivedEvents)
       }
     } catch (e) {
       setMessages([...next, { role: 'assistant', content: `⚠ ${(e as Error).message}` }])
@@ -316,6 +389,67 @@ export default function App() {
               </form>
             )}
           </div>
+
+          {/* Referee Verdict Card */}
+          {(refereeLoading || refereeVerdict) && (
+            <div className="referee-card">
+              <div className="referee-header">
+                <span className="referee-title">⚖️ Guild Referee</span>
+                {refereeLoading ? (
+                  <span className="verdict-chip offline">Judging…</span>
+                ) : (
+                  <span className={`verdict-chip ${refereeVerdict?.verdict || 'offline'}`}>
+                    {refereeVerdict?.source === 'offline' ? 'Referee Offline' : refereeVerdict?.verdict}
+                  </span>
+                )}
+              </div>
+
+              {refereeLoading ? (
+                <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                  Evaluating play transcript against OWASP criteria with Guild agent…
+                </div>
+              ) : refereeVerdict?.source === 'offline' ? (
+                <div className="referee-body">
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    Referee agent is offline (set GUILD_API_KEY in .env to enable live judging).
+                  </div>
+                  <a
+                    href="https://app.guild.ai/users/ali-mo/workspaces/agentbreaker"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="referee-link"
+                  >
+                    Judged by a Guild agent (ali-mo~agentbreaker-referee) ↗
+                  </a>
+                </div>
+              ) : (
+                <div className="referee-body">
+                  <div className="referee-field">
+                    <strong>Technique:</strong>
+                    <span>{refereeVerdict?.technique}</span>
+                  </div>
+                  <div className="referee-field">
+                    <strong>Score:</strong>
+                    <span style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>
+                      +{refereeVerdict?.points} pts
+                    </span>
+                  </div>
+                  <div className="referee-field">
+                    <strong>Takeaway:</strong>
+                    <span>{refereeVerdict?.takeaway}</span>
+                  </div>
+                  <a
+                    href="https://app.guild.ai/users/ali-mo/workspaces/agentbreaker"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="referee-link"
+                  >
+                    Judged by a Guild agent (ali-mo~agentbreaker-referee) ↗
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Panel 2: Live Agent Chat */}
@@ -561,6 +695,38 @@ export default function App() {
                 <span>Final Score</span>
               </div>
             </div>
+
+            {refereeVerdict && (
+              <div
+                style={{
+                  background: 'rgba(99, 102, 241, 0.1)',
+                  border: '1px solid rgba(99, 102, 241, 0.3)',
+                  borderRadius: 8,
+                  padding: 12,
+                  textAlign: 'left',
+                  fontSize: 12,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <strong>⚖️ Guild Referee Evaluation:</strong>
+                  <span className={`verdict-chip ${refereeVerdict.verdict}`}>{refereeVerdict.verdict}</span>
+                </div>
+                <div style={{ marginBottom: 4 }}>
+                  <strong>Technique:</strong> {refereeVerdict.technique}
+                </div>
+                <div style={{ marginBottom: 4 }}>
+                  <strong>Takeaway:</strong> {refereeVerdict.takeaway}
+                </div>
+                <a
+                  href="https://app.guild.ai/users/ali-mo/workspaces/agentbreaker"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="referee-link"
+                >
+                  Judged by a Guild agent (ali-mo~agentbreaker-referee) ↗
+                </a>
+              </div>
+            )}
 
             <div style={{ textAlign: 'left', fontSize: 12, color: 'var(--text-muted)' }}>
               <strong>Mitigations Mastered:</strong>

@@ -186,6 +186,7 @@ The codebase was engineered for maximum security hygiene and scanned with **Snyk
 
 The **AgentBreaker Referee** is a Guild agent that judges play sessions: it decides whether a solve was a legitimate exploit or blocked by the defense, classifies the technique used, scores the attempt and gives a defender takeaway.
 
+- **Referee API Integration:** The game calls the Referee through the Guild REST API (`POST /workspaces/{id}/sessions` and event polling) using `GUILD_API_KEY`. Configure `GUILD_API_KEY=<your-key>` in `.env` to enable live judging, or run in graceful offline mode if unconfigured.
 - **Guild Workspace:** https://app.guild.ai/users/ali-mo/workspaces/agentbreaker
 - **Agent:** `ali-mo~agentbreaker-referee` (published, installed in the workspace above)
 - **Source:** [`guild/referee/agent.ts`](guild/referee/agent.ts). It is a one-shot LLM agent with **no tools**, so a hostile transcript cannot make it act on anything. Session reports are treated as untrusted data.
