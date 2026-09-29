@@ -2,7 +2,7 @@
 
 > An interactive Capture-the-Flag game designed to train developers and security engineers on exploiting and mitigating the **OWASP Top 10 for LLM Applications** and Agentic Systems (including MCP tool poisoning and supply-chain attacks).
 
-![AgentBreaker CTF Interface](./docs/screenshot.png)
+![AgentBreaker CTF Interface](./docs/screenshot.jpg)
 
 ---
 
